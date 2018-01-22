@@ -1,0 +1,154 @@
+﻿using UnityEngine;
+using System.Collections;
+
+public class ChangeColor : MonoBehaviour {
+
+	bool colourChangeCollision = false;
+	Color dropletcolor;
+	float redgoal, greengoal, bluegoal;
+	float red = 0;
+	float green = 0;
+	float blue = 0;
+	float success = 0;
+
+	void Awake(){
+		red = Random.Range(0, 255);
+		blue = Random.Range(0, 255);
+		green = Random.Range(0, 255);
+		transform.GetComponent<Renderer>().material.color = new Color(red/255,green/255,blue/255);
+	}
+	
+	void Update () {
+		checkColourChange();
+		checkSuccess();
+	}
+
+	public void OnCollisionEnter2D(Collision2D col){
+		Debug.Log("Contact was made!");
+		colourChangeCollision = true;
+		dropletcolor = col.gameObject.GetComponent<Renderer>().material.color;
+		Destroy(col.gameObject);
+	}
+
+	public void checkColourChange()
+	{  
+		Color c = transform.GetComponent<Renderer>().material.color;
+		if(colourChangeCollision)
+		{
+			if(dropletcolor == Color.red && red <= 255){
+				red += 5;
+				colourChangeCollision = false;
+			}
+			else if(dropletcolor == Color.green && green <= 255){
+				green += 5;
+				colourChangeCollision = false;
+			}
+			else if(dropletcolor == Color.blue  && blue <= 255){
+				blue += 5;
+				colourChangeCollision = false;
+			}
+			else if(dropletcolor == Color.black){
+				if(red > 0)
+					red -= 5;
+				if(green > 0)
+					green -= 5;
+				if(blue > 0)
+					blue -= 5;
+				colourChangeCollision = false;
+			}
+			//Debug.Log ("red: " + red + " green: " + green + " blue: " + blue);
+			c = new Color(red/255,green/255,blue/255);
+			transform.GetComponent<Renderer>().material.color = c;
+		}
+	}
+
+	void checkSuccess(){
+		redgoal = (GameObject.FindGameObjectWithTag("Goal").GetComponent<Renderer>().material.color.r)*255;
+		//Debug.Log ("Redgoal:" + redgoal);
+		greengoal = (GameObject.FindGameObjectWithTag("Goal").GetComponent<Renderer>().material.color.g)*255;
+		bluegoal = (GameObject.FindGameObjectWithTag("Goal").GetComponent<Renderer>().material.color.b)*255;
+
+		float norm = Mathf.Sqrt(((redgoal * redgoal) + (greengoal * greengoal) + (bluegoal * bluegoal))*((red*red)+(blue*blue)+(green*green)));
+
+		success = 100 *(((red*redgoal)+(green*greengoal)+(blue*bluegoal))/norm);
+		Debug.Log("Success: " + success);
+
+	}
+}
+
+//////////////////////////////////////////////////////
+
+using UnityEngine;
+using System.Collections;
+
+public class DropColor : MonoBehaviour {
+
+	public Transform drop;
+	Transform createPos;
+	public Color dropletcolor = Color.white;
+
+	void Awake () {
+		createPos = (transform.FindChild ("dropper")).FindChild("bottom");
+	}
+
+	void Update () {
+		if (Input.GetMouseButtonDown(0))
+		{
+			Debug.Log("Mouse is down");
+			
+			RaycastHit2D hitInfo = Physics2D.Raycast(Camera.main.ScreenToWorldPoint(Input.mousePosition), Vector2.zero);
+			if (hitInfo.collider != null) 
+			{
+				Debug.Log("Hit " + hitInfo.collider.transform.gameObject.name);
+				if (hitInfo.transform.gameObject.tag == "Clickable"){
+					Debug.Log ("It will drop!");
+					Effect ();
+				} else if (hitInfo.transform.gameObject.tag == "Red"){
+					ChangeColor(Color.red);
+				}else if (hitInfo.transform.gameObject.tag == "Green"){
+					ChangeColor(Color.green);
+				}else if (hitInfo.transform.gameObject.tag == "Blue"){
+					ChangeColor(Color.blue);
+				}else if (hitInfo.transform.gameObject.tag == "Black"){
+					ChangeColor(Color.black);
+				}
+				else{
+					Debug.Log ("Nope :(");
+				}
+			} else {
+				Debug.Log("No hit for drop");
+			}
+			Debug.Log("Mouse is down");
+		} 
+	}
+
+	public void ChangeColor(Color c){
+		Debug.Log ("Selected color: " + c);
+
+		dropletcolor = c;
+	}
+
+	void Effect(){
+		drop.GetComponent<Renderer>().sharedMaterial.color = dropletcolor;
+		Instantiate(drop, createPos.position, createPos.rotation);
+	}
+}
+
+////////////////////////////////////////////////
+
+using UnityEngine;
+using System.Collections;
+
+public class CheckGoal : MonoBehaviour {
+
+	float red = 0;
+	float green = 0;
+	float blue = 0;
+	
+	void Awake () {
+		red = Random.Range(1, 254);
+		blue = Random.Range(1, 254);
+		green = Random.Range(1, 254);
+		transform.GetComponent<Renderer>().material.color = new Color(red/255,green/255,blue/255);
+	}
+}

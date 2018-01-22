@@ -1,0 +1,351 @@
+import cPickle
+from sklearn import cross_validation
+from sklearn.cross_validation import train_test_split
+import sys
+import logging
+from pprint import pprint
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.linear_model import SGDClassifier
+from sklearn.pipeline import Pipeline
+from sklearn import metrics
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+
+# Display progress logs on stdout
+logging.basicConfig(level=logging.INFO, filename='prepare_out.log', #, stream=sys.stdout,
+                    format='%(asctime)s %(levelname)s %(message)s')
+
+# set up logging to console
+console = logging.StreamHandler()
+console.setLevel(logging.DEBUG)
+# set a format which is simpler for console use
+formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+console.setFormatter(formatter)
+# add the handler to the root logger
+logging.getLogger('').addHandler(console)
+
+import json
+import os
+import string
+import numpy as np
+from multiprocessing import Process
+from threading import Thread
+import time
+
+program = os.path.basename(sys.argv[0])
+logger = logging.getLogger(program)
+
+logging.basicConfig(format='%(asctime)s: %(levelname)s: %(message)s')
+logging.root.setLevel(level=logging.INFO)
+logger.info("running %s" % ' '.join(sys.argv))
+
+thread_count = 12
+small = True
+
+def filepath(name):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+
+def get_stop_words():
+    return set(json.load(open(filepath("./data/stopwords.json"))))
+
+def todict(li):
+    d = dict()
+    for v in li:
+        d[v] = 0
+    return d
+
+def get_indexes(tracks):
+    ind = dict()
+    for i, track in enumerate(tracks):
+        ind[track] = i
+    return ind
+
+stop_words = get_stop_words()
+
+def get_track_ids_with_tags():
+    filename = filepath("./data/tracks_with_tag.txt")
+    with open(filename) as f:
+        return [line.strip('\n') for line in f]
+
+
+def get_mood_tags():
+    filename = filepath("./data/mood_tags.txt")
+    with open(filename) as f:
+        return [line.strip('\n') for line in f]
+
+
+def track_obj_to_tuple(id, track):
+    return (id, map(lambda t: t[0], track['tags']))
+
+def open_track_objects(track_ids):
+    track_objects = []
+    threads = []
+    t_groups = []
+    tracks_per_thread = len(track_ids) / thread_count
+    for i in range(0,thread_count):
+        s = i*tracks_per_thread
+        tids = track_ids[s:s+tracks_per_thread]
+        t_groups.append(tids)
+
+    def process_thread(i, track_ids):
+        logger.info("starting thread %d, (%d items)" % (i, len(track_ids)))
+        for track_id in track_ids:
+            path1 = filepath("./data/lastfm_train/%s/%s/%s/%s.json" % (track_id[2], track_id[3], track_id[4], track_id))
+            path2 = filepath("./data/lastfm_test/%s/%s/%s/%s.json" % (track_id[2], track_id[3], track_id[4], track_id))
+
+            try:
+                track_objects.append(track_obj_to_tuple(track_id, json.load(open(path1))))
+            except:
+                try:
+                    track_objects.append(track_obj_to_tuple(track_id, json.load(open(path2))))
+                except:
+                    track_objects.append(dict())
+
+    for i, t_group in enumerate(t_groups):
+        thread = Thread(target=process_thread, args=(i, t_group))
+        thread.start()
+        threads.append(thread)
+    for thread in threads:
+        thread.join()
+    return track_objects
+
+
+def parse_track_words(line, wordlist, track_ids_with_tags, lookup):
+    parts = line.split(',')
+    # words = dict()
+    words = [0 for i in range(0, len(wordlist))]
+    words_in_track = parts[2:]
+
+    if(parts[0] not in lookup):
+        return None
+
+    for word in words_in_track:
+        p = word.split(':')
+        idx = int(p[0])
+        cnt = p[1]
+        wordstr = wordlist[idx-1]
+        if(wordstr not in stop_words):
+            words[idx-1] = cnt
+            # words[wordstr] = cnt
+
+    # trackid, musixmatchid, word dict
+    # return words
+    return (parts[0], words)
+
+
+def parse_lyrics_set(track_ids_with_tags):
+    filename = filepath("./data/mxm_dataset_train.txt")
+    words = []
+    tracks = []
+    lookup = todict(track_ids_with_tags)
+    with open(filename) as f:
+        for line in f.readlines():
+            if(line[0] == '%'):
+                words = line.strip('%').strip('\n').split(',')
+            elif(line[0] == 'T'):
+                w = parse_track_words(line.strip('\n'), words, track_ids_with_tags, lookup)
+                if(w is not None):
+                    tracks.append(w)
+
+    return (words, tracks)
+
+def feature_vectors(track_objects):
+    l1 = len(track_objects[0][2])
+    m = np.zeros((l1, len(track_objects)))
+    for i, track in enumerate(track_objects):
+        m[i] = track[2]
+
+    return m
+
+t1 = time.time()
+
+track_ids_with_tags = get_track_ids_with_tags()
+
+logger.info('t1 %d' % (time.time()-t1,))
+
+t2 = time.time()
+
+if small:
+    track_ids_with_tags = [item for (idx, item) in enumerate(track_ids_with_tags) if idx % 10 == 0]
+logger.info("track_ids_with_tags length: %d" % len(track_ids_with_tags))
+
+words, lyrics_set = parse_lyrics_set(track_ids_with_tags)
+
+logger.info("lyrics_set length: %d" % len(lyrics_set))
+
+logger.info('t2 %d' % (time.time()-t2,))
+
+t3 = time.time()
+
+track_objects_list = open_track_objects(track_ids_with_tags)
+
+logger.info("Created track_objects_list with length %d in %d seconds" % (len(track_objects_list), time.time()-t3))
+
+ids_of_objects = map(lambda x: x[0], track_objects_list)
+
+tracks_together = []
+
+t4 = time.time()
+
+track_obj_indexes = get_indexes(ids_of_objects)
+
+logger.info("It took %s secs to build track_obj_indexes with size %d." % (time.time()-t4,len(track_obj_indexes)))
+
+cc = 0
+
+for track_with_lyrics in lyrics_set:
+    # idx = ids_of_objects.index(track_with_lyrics[0])
+    try:
+        idx = track_obj_indexes[track_with_lyrics[0]]
+        tracks_together.append(
+            ( track_with_lyrics[0], # id
+              track_with_lyrics[1], # word counts
+              track_objects_list[idx][1] # tags
+            ) )
+    except:
+        cc += 1
+        # logger.info("could not find %s in ids_of_object." % track_with_lyrics[0])
+
+logger.info("cc = %d" % cc)
+
+logger.info("tracks_together length: %d" % len(tracks_together))
+
+mood_tags = get_mood_tags()
+
+def filter_tags(mood):
+    def f(track_tags):
+        for t in track_tags[2]:
+            if t == mood:
+                return 1
+        return 0
+    return f
+
+feature_vector = map(lambda t: t[1], tracks_together)
+
+def count_y(vec):
+    return np.sum(np.array(vec))
+
+for i, mood_tag in enumerate(mood_tags):
+    tracks_with_this_mood = map(filter_tags(mood_tag), tracks_together)
+
+    ta = np.array(tracks_with_this_mood)
+    count_for_tag = np.sum(ta)
+    # logger.info(np.shape(ta))
+    logger.info("tag %s: %f = %d/%d" % (mood_tag, float(count_for_tag) / len(tracks_with_this_mood), count_for_tag, len(tracks_with_this_mood)))
+    SVCparam = {'kernel':['rbf','linear'],
+                'C':[0.01,0.1,1,10,100],
+                'gamma':[0.001,0.01,0.1,1,10,100]}
+    KNCparam = {'n_neighbors':[1,2,5,10,50,100]}
+    RFCparam = {'max_depth':[5,10,25,50,100],
+                'n_estimators':[10,50,100,200,500]}
+    time3 = time.time()
+    # preprocess dataset, split into training and test part
+    X_train, X_test, y_train, y_test = train_test_split(feature_vector, tracks_with_this_mood,  test_size=.2)
+    time4 = time.time()
+    logger.info("Data has been splitted into train and test sets in "+str(time4-time3)+" seconds")
+    svcResults = []
+    kncResults = []
+    rfcResults = []
+    logger.info("KNC tests have begun for "+mood_tag+"!")
+    time5 = time.time()
+    for nneig in KNCparam['n_neighbors']:
+        clf = KNeighborsClassifier(n_neighbors = nneig)
+        score = cross_validation.cross_val_score(clf, X_train, y_train, cv=10)
+        datatosave = {'n_neighbors':nneig,'score':score}
+        logger.info("N_NEIGHBORS: "+str(datatosave['n_neighbors'])+"\tSCORE: "+str(np.mean(datatosave['score'])))
+        kncResults.append(datatosave)
+    time6 = time.time()
+    pickle.dump(kncResults, open(resultPath+"/"+mood_tag+"_KNCResults.txt",'w'))
+    logger.info("KNC tests have been done!")
+    logger.info("This took: "+str(time6-time5)+ " seconds.")
+    #Find best KNC
+    bestKNC = {'score':0}
+    for ares in kncResults:
+        if np.mean(ares['score']) > np.mean(bestKNC['score']):
+            bestKNC = ares
+    logger.info("The best KNC is the one with "+str(bestKNC['n_neighbors'])+' neighbors.')
+    time16 = time.time()
+    clf2 = KNeighborsClassifier(n_neighbors =bestKNC['n_neighbors'])
+    clf2.fit(X_train,y_train)
+    time17 = time.time()
+    scbestknc = clf2.score(X_test,y_test)
+    time18 = time.time()
+    logger.info("Score of best KNC is:"+str(scbestknc))
+    logger.info("Training took "+str(time17-time16)+" seconds and testing took "+str(time18-time17)+" seconds.")
+    logger.info("Results have been written into file")
+    logger.info("All jobs with the KNC has been done.")
+
+    logger.info("SVC tests have begun!")
+    time7 = time.time()
+    for akernel in SVCparam['kernel']:
+        for ac in SVCparam['C']:
+            if akernel != 'linear':
+                for agamma in SVCparam['gamma']:
+                    clf = SVC(kernel=akernel,C=ac,gamma=agamma)
+                    score = cross_validation.cross_val_score(clf, X_train, y_train, cv=10)
+                    datatosave = {'kernel':akernel,'C':ac,'gamma':agamma,'score':score}
+                    logger.info("KERNEL: "+str(datatosave['kernel'])+"\tC:"+str(datatosave['C'])+"\tGAMMA:"+str(datatosave['gamma'])+"\tSCORE: "+str(np.mean(datatosave['score'])))
+                    svcResults.append(datatosave)
+            else:
+                clf = SVC(kernel=akernel,C=ac)
+                score = cross_validation.cross_val_score(clf, X_train, y_train, cv=10)
+                datatosave = {'kernel':akernel,'C':ac,'gamma':'None','score':score}
+                logger.info("KERNEL: "+str(datatosave['kernel'])+"\tC:"+str(datatosave['C'])+"\tSCORE: "+str(np.mean(datatosave['score'])))
+                svcResults.append(datatosave)
+    time8 = time.time()
+    pickle.dump(svcResults, open(resultPath+"/"+mood_tag+"_SVCResults.txt",'w'))
+    logger.info("SVC tests have been done!")
+    logger.info("This took: "+str(time8-time7)+ " seconds.")
+    #Find best SVC
+    bestSVC = {'score':0}
+    for ares in svcResults:
+        if np.mean(ares['score']) > np.mean(bestSVC['score']):
+            bestSVC = ares
+    logger.info("The best SVC is the one with "+bestSVC['kernel']+' kernel, C='+str(bestSVC['C'])+' and gamma='+str(bestSVC['gamma']))
+    time13 = time.time()
+    clf1 = SVC(kernel = bestSVC['kernel'],C = bestSVC['C'],gamma =bestSVC['gamma'])
+    clf1.fit(X_train,y_train)
+    time14 = time.time()
+    scbestsvc = clf1.score(X_test,y_test)
+    time15 = time.time()
+    logger.info("Score of best SVC is:"+str(scbestsvc))
+    logger.info("Training took "+str(time14-time13)+" seconds and testing took "+str(time15-time14)+" seconds.")
+    logger.info("Results have been written into file")
+    logger.info("All jobs with the SVC has been done.")
+
+    logger.info("RFC tests have begun!")
+    time9 = time.time()
+    for dep in RFCparam['max_depth']:
+        for nest in RFCparam['n_estimators']:
+            clf = RandomForestClassifier(max_depth=dep,n_estimators=nest)
+            score = cross_validation.cross_val_score(clf, X_train, y_train, cv=10)
+            datatosave = {'max_depth':dep,'n_estimators':nest,'score':score}
+            logger.info("MAX DEPTH: "+str(datatosave['max_depth'])+"\t#ESTIMATORS:"+str(datatosave['n_estimators'])+"\tSCORE: "+str(np.mean(datatosave['score'])))
+            rfcResults.append(datatosave)
+    time10 = time.time()
+    pickle.dump(rfcResults, open(resultPath+"/"+mood_tag+"_RFCResults.txt",'w'))
+    logger.info("RFC tests have been done!")
+    logger.info("This took: "+str(time10-time9)+ " seconds.")
+    #Find best RFC
+    bestRFC = {'score':0}
+    for ares in rfcResults:
+        if np.mean(ares['score']) > np.mean(bestRFC['score']):
+            bestRFC = ares
+    logger.info("The best RFC is the one with "+str(bestRFC['max_depth'])+' max depth and '+str(bestRFC['n_estimators'])+' estimators.')
+    time19 = time.time()
+    clf3 = RandomForestClassifier(max_depth = bestRFC['max_depth'],n_estimators = bestRFC['n_estimators'])
+    clf3.fit(X_train,y_train)
+    time20 = time.time()
+    scbestrfc = clf3.score(X_test,y_test)
+    time21 = time.time()
+    logger.info("Score of best RFC is:"+str(scbestrfc))
+    logger.info("Training took "+str(time20-time19)+" seconds and testing took "+str(time21-time20)+" seconds.")
+    logger.info("Results have been written into file")
+    logger.info("All jobs with the RFC has been done.")
+
+    logger.info("All tests are done and all results have been written into file!")
+    results = {'svc':svcResults,'knc':kncResults,'rfc':rfcResults,'bests':[bestSVC,bestKNC,bestRFC],'resofbests':[scbestsvc,scbestknc,scbestrfc]}
+    pickle.dump(results, open(resultPath+"/"+mood_tag+"_Results.txt",'w'))
+    end=time.time()
+    logger.info("Running the code took "+str(end-begin)+ " seconds.")
+    logger.info("END OF TRAINING OF "+ mood_tag + " MOOD TAG.")

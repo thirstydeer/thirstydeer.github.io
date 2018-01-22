@@ -1,0 +1,285 @@
+# to calculate correlation coefficients and data serialization
+import pandas as pd
+import numpy as np
+import json
+import cPickle as pickle
+import math
+from scipy.stats.stats import pearsonr
+import progressbar
+
+data = pd.read_csv("data_books.csv", sep = ",", header=None,
+                         names=['Reviewer', 'Book', 'Rating'])
+
+def mean(x):
+    sum = 0.0
+    for i in x:
+         sum += i
+    return sum / len(x) 
+
+def sampleStandardDeviation(x):
+    sumv = 0.0
+    for i in x:
+         sumv += (i - mean(x))**2
+    return math.sqrt(sumv/(len(x)-1))
+
+def pearson(x,y):
+    scorex = []
+    scorey = []
+
+    for i in x: 
+        scorex.append((i - mean(x))/sampleStandardDeviation(x)) 
+
+    for j in y:
+        scorey.append((j - mean(y))/sampleStandardDeviation(y))
+ 
+    return (sum([i*j for i,j in zip(scorex,scorey)]))/(len(x)-1)
+
+def get_book_reviews(title, common_reviewers):
+    mask = (data.Reviewer.isin(common_reviewers)) & (data.Book==title)
+    reviews = data[mask].sort('Reviewer')
+    reviews = reviews[reviews.Reviewer.duplicated()==False]
+    return reviews
+
+def calculate_correlation(book1, book2):
+    book_1_reviewers = data[data.Book == book1].Reviewer
+    book_2_reviewers = data[data.Book == book2].Reviewer
+    common_reviewers = set(book_1_reviewers).intersection(book_2_reviewers)
+
+    book_1_reviews = get_book_reviews(book1, common_reviewers)
+    book_2_reviews = get_book_reviews(book2, common_reviewers)
+    
+    return pearsonr(book_1_reviews.Rating, book_2_reviews.Rating)[0]
+
+most_reviewed_books = pd.DataFrame({'count' : data.groupby(["Book"]).size()})\
+                                    .reset_index().sort(['count'],ascending = False)
+
+top_books = []
+maxBook = 600
+for i in most_reviewed_books.Book[0:maxBook]:
+    top_books.append(i)
+    
+correlation_coefficient = []
+
+progBar = 0;
+bar = progressbar.ProgressBar(maxval=maxBook-1, \
+    widgets=[progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
+bar.start()
+for book1 in top_books:
+    #print "Calculating the correlations for:", book1
+    bar.update(progBar)
+    progBar=progBar+1
+    for book2 in top_books:
+        if book1 != book2:
+            row = [book1, book2] + [calculate_correlation(book1, book2)]
+            correlation_coefficient.append(row)
+
+pickle.dump( correlation_coefficient, open( "allcor600.p","w"))
+bar.finish()
+
+###################################################################
+
+import pandas as pd
+import numpy as np
+import json
+import pickle
+import math
+from scipy.stats.stats import pearsonr
+
+data = pd.read_csv("data_books.csv", sep = ",", header=None,
+                         names=['Reviewer', 'Book', 'Rating'])
+
+#print "There are %d rows in this dataframe" %len(data)
+#print data.head(100)
+ 
+top_books = pd.value_counts(data.Book)
+#print top_books
+
+top_reviewers = pd.value_counts(data.Reviewer)
+#print top_reviewers.head(2000)
+
+book_1, book_2 = "Harry Potter and the Sorcerer's Stone (Harry Potter (Paperback))", "Harry Potter and the Chamber of Secrets (Book 2)"
+book_1_reviewers = data[data.Book == book_1].Reviewer
+book_2_reviewers = data[data.Book == book_2].Reviewer
+common_reviewers = set(book_1_reviewers).intersection(book_2_reviewers)
+
+#print "%d people have reviewed these 2 books" % len(common_reviewers)
+
+list_common_reviewers = []
+
+for i in common_reviewers:
+    list_common_reviewers.append(i)
+
+common_reviewers_only = data[data.Reviewer.isin(list_common_reviewers)]
+
+#print common_reviewers_only.head(10)
+
+def get_book_reviews(title, common_reviewers):
+    mask = (data.Reviewer.isin(common_reviewers)) & (data.Book==title)
+    reviews = data[mask].sort('Reviewer')
+    reviews = reviews[reviews.Reviewer.duplicated()==False]
+    return reviews
+    
+def mean(x):
+    sum = 0.0
+    for i in x:
+         sum += i
+    return sum / len(x) 
+
+def sampleStandardDeviation(x):
+    sumv = 0.0
+    for i in x:
+         sumv += (i - mean(x))**2
+    return math.sqrt(sumv/(len(x)-1))
+
+def pearson(x,y):
+    scorex = []
+    scorey = []
+
+    for i in x: 
+        scorex.append((i - mean(x))/sampleStandardDeviation(x)) 
+
+    for j in y:
+        scorey.append((j - mean(y))/sampleStandardDeviation(y))
+
+    return (sum([i*j for i,j in zip(scorex,scorey)]))/(len(x)-1)
+
+def calculate_correlation(book1, book2):
+    book_1_reviewers = data[data.Book == book1].Reviewer
+    book_2_reviewers = data[data.Book == book2].Reviewer
+    common_reviewers = set(book_1_reviewers).intersection(book_2_reviewers)
+    #print book_1_reviewers
+    #print book_2_reviewers
+    book_1_reviews = get_book_reviews(book1, common_reviewers)
+    book_2_reviews = get_book_reviews(book2, common_reviewers)
+    print common_reviewers
+    return pearsonr(book_1_reviews.Rating, book_2_reviews.Rating)[0]
+
+#print 'correlation:'
+#print calculate_correlation(book_1,book_2)
+
+most_reviewed_books = pd.DataFrame({'count' : data.groupby(["Book"]).size()})\
+                                    .reset_index().sort(['count'],ascending = False)
+
+#print most_reviewed_books.head(20)  
+
+top_books = []
+
+for i in most_reviewed_books.Book[0:600]:
+    top_books.append(i)
+    
+correlation_coefficient = []
+            
+#pickle.dump( correlation_coefficient, open( "save.p", "wb" ) )
+cc = pickle.load( open( "allcor600.p", "rb" ) )
+print 'LOADED!'
+                  
+cols = ["Book_1", "Book_2", "Correlation"]
+correlation_coefficient = pd.DataFrame(cc, columns=cols).sort('Correlation')
+#print correlation_coefficient.head(10)
+
+def calc_correlation(corr, book1, book2):
+    mask = (corr.Book_1==book1) & (corr.Book_2==book2)
+    row = corr[mask]
+    corr = row
+    #print corr.sum(axis=1)
+    return corr.sum(axis=1).tolist()
+
+# to calculate number of rows in the dataset for 600 books
+datalen = 0
+
+rembook = ''
+def recbook(user_id):
+    book_shelf = []
+    results = []
+    sres = []
+    mask = data.Reviewer == user_id
+    reviews = data[mask].sort('Reviewer')
+    #print masked.head(10)
+    print 'Books: ', reviews
+    book_shelf = reviews
+    bs = book_shelf.sort('Rating')
+    bs = bs.head(5)
+
+    countCheck = 0
+    for my_book in bs.Book:
+        for b in top_books:
+            corrResult = calc_correlation(correlation_coefficient, b, my_book)
+            if my_book!=b and len(corrResult) >0:
+                if corrResult[0] > 0.5:
+                    results.append((b, corrResult[0]))
+                    countCheck = countCheck + 1
+                    if countCheck >10: 
+                        break
+                        break
+                #results.append((b, calc_correlation(correlation_coefficient, b, my_book)))
+    sorted_results = sorted(results,key = lambda l:l[1],reverse=True)
+    
+    rembook = sorted_results[0]
+    k = 1
+    if len(sorted_results)<11:
+        for k in range(len(sorted_results)):
+            sres.append(sorted_results[k])
+    else:
+        for k in range(11):
+            sres.append(sorted_results[k])
+
+    return sres
+
+# for evaluation
+def recbook2(user_id):
+    book_shelf = []
+    results = []
+    sres = []
+    mask = data.Reviewer == user_id
+    reviews = data[mask].sort('Reviewer')
+    book_shelf = reviews
+    bs = book_shelf.sort('Rating')
+
+    bs = bs[1:6]
+    countCheck = 0
+    for my_book in bs.Book:
+        for b in top_books:
+            corrResult = calc_correlation(correlation_coefficient, b, my_book)
+            if my_book!=b and len(corrResult) >0:
+                if corrResult[0] > 0.5:
+                    results.append((b, corrResult[0]))
+                    countCheck = countCheck + 1
+                    if countCheck >10: 
+                        break
+                        break
+    sorted_results = sorted(results,key = lambda l:l[1],reverse=True)
+
+    if len(sorted_results)<10:
+        for m in range(len(sorted_results)):
+            sres.append(sorted_results[m])
+    else:
+        for m in range(10):
+            sres.append(sorted_results[m])
+
+    return sres
+    
+print 'First Example for user 34075:'
+print 'Normal: ', recbook(34075)
+print 'For evaluation:', recbook2(34075)
+print '************************************************'
+
+print 'Second Example for user 7620:'
+print 'Normal: ', recbook(7620)
+print 'For evaluation:', recbook2(7620)
+print '************************************************'
+
+print 'Third Example for user 6575:'
+print 'Normal: ', recbook(6575)
+print 'For evaluation:', recbook2(6575)
+print '************************************************'
+
+print 'Fourth Example for user 276744:'
+print 'Normal: ', recbook(276744)
+print 'For evaluation:', recbook2(276744)
+print '************************************************'
+
+print 'Fifth Example for user 7105:'
+print 'Normal: ', recbook(7105)
+print 'For evaluation:', recbook2(7105)
+print '************************************************'
+

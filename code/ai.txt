@@ -1,0 +1,180 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import socket
+import threading
+import random
+import gensim
+import sys
+import os
+import time
+class multiThreadedServer(object):
+    """This class is the main multi threaded server client that deals with the clients' requests."""
+    def __init__(self, host, port, model):
+        self.cardDepot = []
+        self.fullDepot = []
+        if os.path.isfile("cardDepot.csv"):
+            afile = open("cardDepot.csv","r")
+            rows = afile.readlines()
+            for row in rows:
+                splittedRow = row.split(",")
+                thecard = Card(realWord=splittedRow[0],w1=splittedRow[1],w2=splittedRow[2],w3=splittedRow[3],w4=splittedRow[4])
+                self.cardDepot.append(thecard)
+                self.fullDepot.append(thecard)
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.host, self.port))
+        self.model = model
+        threading.Thread(target=self.checkDepot).start()
+
+    def listen(self):
+        self.sock.listen(5)
+        while True:
+            print('Waiting for a client to connect...')
+            client, address = self.sock.accept()
+            client.settimeout(10)
+            threading.Thread(target = self.listenToClient,
+                            args = (client,address,self.model)).start()
+    def checkDepot(self):
+        while True:
+            time.sleep(10)
+            if len(self.cardDepot) > 4:
+                print "===============CLEANING RAM=============== "
+                print "Card depot has "+str(len(self.cardDepot))+" size."
+                print "Storing into file and clearing RAM."
+                with open('cardDepot.csv', 'a') as afile:
+                    for acard in self.cardDepot:
+                        row = acard.realWord+","+acard.w1+","+acard.w2+","+acard.w3+","+acard.w4+"\n"
+                        afile.write(row)
+                self.cardDepot = []
+                print "===============CLEANING DONE==============="
+
+    def listenToClient(self, client, address, model):
+        print "===========NEW CLIENT CONNECTION==========="
+        print('Connected by: ', address)
+        size = 4096
+        while True:
+            try:
+                incomingMessage = client.recv(size)
+                print "\nMessage taken: "+incomingMessage
+                if incomingMessage[2] == "w":
+                    # word#Example
+                    print "Message Type: Asking card for given word"
+                    word = preprocessWordMessage(incomingMessage)
+                    print "Word: "+word
+                    card = generateCard(word,model)
+                    print "The found card is:"
+                    if card.realWord != "":
+                        card.displayCard()
+                    else:
+                        print "A card for that word could not be generated."
+                    cardMessage = card.generateMessage()
+                    print "Message Sent:"+cardMessage
+                    client.send(cardMessage)
+                elif incomingMessage[2] == "c":
+                    print "New feedback has come."
+                    # card#mainword#word1#word2#word3#word4#
+                    card = preprocessCardMessage(incomingMessage)
+                    card.displayCard()
+                    self.cardDepot.append(card)
+                    self.fullDepot.append(card)
+                    print "Card Depot now has "+str(len(self.cardDepot)) + " cards."
+                    client.send("Thank You!")
+                elif incomingMessage[2] == "r":
+                    # random
+                    print "User wants a random card"
+                    if len(self.fullDepot) > 0:
+                        card = random.choice(self.fullDepot)
+                        print "Randomly selected card:"
+                        card.displayCard()
+                        message = card.generateMessage()
+                        client.send(message)
+                    else:
+                        print "but there is no card in the depot"
+                        client.send("NoCardInDepot")
+                client.close()
+            except:
+                client.close()
+                return False
+            print "=============END OF CONNECTION============="
+class Card:
+    cardCount = 0
+    def __init__(self, realWord, w1="", w2="", w3="", w4=""):
+        self.realWord = realWord
+        self.w1 = w1
+        self.w2 = w2
+        self.w3 = w3
+        self.w4 = w4
+        if realWord != "":
+            Card.cardCount += 1
+    def displayCount(self):
+        print "Total Card %d" % Card.cardCount
+    def generateMessage(self):
+        if self.realWord != "":
+            message = "[card#"+self.realWord+"#"+self.w1+"#"+self.w2+"#"+self.w3+"#"+self.w4+"]"
+        else:
+            message = "notInVocab#"
+        return message
+    def displayCard(self):
+        print "CW: ", self.realWord,"\nW1: ",self.w1,"\nW2: ",self.w2,"\nW3: ",self.w3,"\nW4: ",self.w4
+
+def preprocessWordMessage(incomingMessage):
+    realWord = incomingMessage[7:len(incomingMessage)]
+    return realWord
+
+def preprocessCardMessage(incomingMessage):
+    count = 0
+    places = []
+    for i in range(len(incomingMessage)):
+        if incomingMessage[i] == "#":
+            places.append(i)
+    rword = incomingMessage[places[0]+1:places[1]]
+    w1 = incomingMessage[places[1]+1:places[2]]
+    w2 = incomingMessage[places[2]+1:places[3]]
+    w3 = incomingMessage[places[3]+1:places[4]]
+    w4 = incomingMessage[places[4]+1:places[5]]
+    card = Card(realWord = rword, w1=w1, w2=w2, w3=w3, w4=w4)
+    return card
+
+def generateCard(word,model):
+    try:
+        cardwords = model.most_similar(word.decode("utf-8"),topn=4)
+        ourcard = Card(realWord = word,w1=cardwords[0][0].encode("utf-8"),w2=cardwords[1][0].encode("utf-8"),w3=cardwords[2][0].encode("utf-8"),w4=cardwords[3][0].encode("utf-8"))
+    except KeyError:
+        ourcard = Card(realWord = "")
+    return ourcard
+
+if __name__ == '__main__':
+    print "running %s" % ' '.join(sys.argv)
+
+    print "Selected mode is: " + sys.argv[1]
+    count = 0
+    if sys.argv[1] == "mts":
+        #mts stands for multithreaded server
+        if len(sys.argv) < 3:
+            print globals()['__doc__'] % locals()
+            sys.exit(1)
+        port_num= int(sys.argv[2])
+        print "Loading w2v model..."
+        model = gensim.models.Word2Vec.load("aiproj5.model")
+        multiThreadedServer('',port_num,model).listen()
+    elif sys.argv[1] == "trainmodel":
+        #Example: python aiprojserver.py trainmodel 100 10 20 0 wiki.txt wiki.model
+        vectorSize = sys.argv[2]
+        windowSize = sys.argv[3]
+        minCount = sys.argv[4]
+        algo = sys.argv[5] #0 for cbow
+        inp = sys.argv[6]
+        outp = sys.argv[7]
+        model = Word2Vec(LineSentence(inp), size=vectorSize, window=windowSize, min_count=minCount, sg=algo, workers=multiprocessing.cpu_count())
+        model.init_sims(replace=False)
+        model.save(outp)
+
+
+
+
+
+
+
